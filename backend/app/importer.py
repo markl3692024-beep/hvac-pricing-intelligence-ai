@@ -209,13 +209,18 @@ def parse_csv_like(content: bytes, delimiter: str) -> ParsedTable:
     return choose_header(list(csv.reader(io.StringIO(text), delimiter=delimiter)))
 
 
-def parse_excel(content: bytes) -> ParsedTable:
+def parse_excel_tables(content: bytes) -> list[tuple[str, ParsedTable]]:
     from openpyxl import load_workbook
 
     workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    sheet = workbook[workbook.sheetnames[0]]
-    rows = [[normalize(cell) for cell in row] for row in sheet.iter_rows(values_only=True)]
-    return choose_header(rows)
+    tables: list[tuple[str, ParsedTable]] = []
+    for sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+        rows = [[normalize(cell) for cell in row] for row in sheet.iter_rows(values_only=True)]
+        table = choose_header(rows)
+        if table.headers and table.rows:
+            tables.append((sheet_name, table))
+    return tables
 
 
 def parse_pdf(content: bytes) -> ParsedTable:
@@ -368,17 +373,18 @@ def ai_normalize_rows(rows: list[PriceImportRow], default_vendor: str, default_r
 def parse_price_file(filename: str, content: bytes, default_vendor: str = "Imported", default_region: str = "default", ai_provider: str | None = None) -> tuple[list[PriceImportRow], bool, str]:
     extension = Path(filename).suffix.lower()
     if extension == ".csv":
-        table = parse_csv_like(content, ",")
+        rows = table_to_rows(parse_csv_like(content, ","), default_vendor, default_region, filename)
     elif extension == ".tsv":
-        table = parse_csv_like(content, "\t")
+        rows = table_to_rows(parse_csv_like(content, "\t"), default_vendor, default_region, filename)
     elif extension in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
-        table = parse_excel(content)
+        rows = []
+        for sheet_name, table in parse_excel_tables(content):
+            rows.extend(table_to_rows(table, default_vendor, default_region, f"{filename} / {sheet_name}"))
     elif extension == ".pdf":
-        table = parse_pdf(content)
+        rows = table_to_rows(parse_pdf(content), default_vendor, default_region, filename)
     else:
         raise ValueError("Unsupported file type. Upload .xlsx, .csv, .tsv, or .pdf.")
 
-    rows = table_to_rows(table, default_vendor, default_region, filename)
     return ai_normalize_rows(rows, default_vendor, default_region, filename, ai_provider)
 
 
